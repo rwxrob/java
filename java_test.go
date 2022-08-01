@@ -38,9 +38,9 @@ func ExampleExtract() {
 
 }
 
-func ExampleRunJava() {
+func ExampleExecJava() {
 
-	err := java.RunJava("testdata/javafiles/hello.java")
+	err := java.ExecJava("testdata/javafiles/hello.java")
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -49,7 +49,7 @@ func ExampleRunJava() {
 	// Hello, World!
 }
 
-func ExampleRunString() {
+func ExampleExecString() {
 
 	raw := `
 class HelloWorld {
@@ -59,7 +59,7 @@ class HelloWorld {
 }
 `
 
-	err := java.RunString(raw)
+	err := java.ExecString(raw)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -68,12 +68,23 @@ class HelloWorld {
 	// Hello, World!
 }
 
-func ExampleRunClass_nocache() {
+func ExampleExecJar() {
+
+	err := java.ExecJar("testdata/files.jar")
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	// Output:
+	// Hello, World!
+}
+
+func ExampleExecClass_nocache() {
 
 	defer os.Setenv("CLASSPATH", os.Getenv("CLASSPATH"))
 	os.Setenv("CLASSPATH", "testdata/javafiles")
 
-	err := java.RunClass("HelloWorld")
+	err := java.ExecClass("HelloWorld")
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -82,7 +93,7 @@ func ExampleRunClass_nocache() {
 	// Hello, World!
 }
 
-func ExampleRunClass_cached() {
+func ExampleExecClass_cached() {
 
 	java.CacheDir = "testdata/tmpcache"
 	defer os.RemoveAll("testdata/tmpcache")
@@ -90,10 +101,59 @@ func ExampleRunClass_cached() {
 		fmt.Println(err)
 	}
 
-	err := java.RunClass("HelloWorld")
+	err := java.ExecClass("HelloWorld")
 	if err != nil {
 		fmt.Println(err)
 	}
+
+	// Output:
+	// Hello, World!
+}
+
+func ExampleOutJava_with_Args() {
+
+	out := java.OutJava("testdata/javafiles/fooprop.java", "-Dfoo=bar")
+	fmt.Println(out)
+
+	// Output:
+	// bar
+}
+
+func ExampleOutString_with_Args() {
+
+	raw := `
+import java.util.*;
+class HelloWorld {
+    public static void main(String[] args) {
+        System.out.println("Hello, World!");
+				Properties p = System.getProperties();
+				String value = (String)p.get("foo");
+				System.out.println(value);
+    }
+}
+`
+
+	out := java.OutString(raw, "-Dfoo=bar")
+	fmt.Println(out)
+
+	// Output:
+	// Hello, World!
+	// bar
+}
+
+func ExampleOutClass() {
+
+	defer os.Setenv("CLASSPATH", os.Getenv("CLASSPATH"))
+	os.Setenv("CLASSPATH", "testdata/javafiles")
+	fmt.Println(java.OutClass("HelloWorld"))
+
+	// Output:
+	// Hello, World!
+}
+
+func ExampleOutJar() {
+
+	fmt.Println(java.OutJar("testdata/files.jar"))
 
 	// Output:
 	// Hello, World!
