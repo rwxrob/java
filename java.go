@@ -1,19 +1,30 @@
 /*
-Package java uses Go embed.FS so that packages can be created to encapsulate
-Java JAR, class, and raw source files that have been embedded into the
-package with the default java executable on the host system. This
-package includes a caching mechanism implemented in the Extract and
-Cached functions so that the files need not be extracted with every
-execution.  The java command invocation depends entirely on the version
-of java installed on the host system and observes CLASSPATH and other java-specific environment variables. Additional arguments may be passed to any of the Exec* or Out* functions and will be directly passed to the java command command line (without any shell expansion, of course). The Exec* functions map stdin/out/err to that of the OS while the Out* functions return a string with stdout and log any stderr (see internal/exec.go).
+
+Package java uses Go embed.FS so that packages can be created to
+encapsulate Java JAR, class, and raw source files that have been
+embedded into the package with the default java executable on the host
+system. This package includes a caching mechanism implemented in the
+Extract and Cached functions so that the files need not be extracted
+with every execution.  The java command invocation depends entirely on
+the version of java installed on the host system and observes CLASSPATH
+and other java-specific environment variables.
+
+Options beginning with dash passed as arguments before the main
+class/jar/java file are preserved. Options must use the equals or colon
+format to avoid confusion with the main identifier. Arguments following
+the class/jar/java argument are passed as expected.  No shell expansion
+is performed.
+
+The Exec function maps the output of the java command to the system
+stdin/out/err (which can be redirected to a file by assigning to
+os.Stdin, etc.) while the Out function returns a string with stdout and
+logs stderr (see internal/exec.go).
 
 */
 package java
 
 import (
 	"embed"
-	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +32,14 @@ import (
 	"github.com/rwxrob/fs"
 	"github.com/rwxrob/java/internal"
 )
+
+// Cmd is a java command line with options preceding the named
+// class/jar/java file. Args come after.
+type Cmd struct {
+	Name    string
+	Options []string
+	Args    []string
+}
 
 // CacheDir is set to os.UserCacheDir() plus "gojavacache" by default at
 // init time.
@@ -34,7 +53,8 @@ func init() {
 }
 
 // Extract explicitly extracts all of an embedded file system into the
-// CacheDir starting from the root path passed.
+// CacheDir starting from the root path passed. Files in the CacheDir
+// always have priority over anything else on the system.
 func Extract(fsys embed.FS, root string) error {
 	os.MkdirAll(CacheDir, fs.ExtractDirPerms)
 	return fs.ExtractEmbed(fsys, root, CacheDir)
@@ -50,184 +70,112 @@ func Cached(file string) string {
 	return ""
 }
 
-// Exec is a convenience function that takes a file path ending with
-// ".class", ".jar", ".java" and calls ExecClass, ExecJar, or ExecJava. If
-// none of these suffixes match, and the string has a length greater
-// than 10, assumes ExecString.
-func Exec(it string, args ...string) error {
-	switch {
-	case strings.HasSuffix(it, ".class"):
-		return ExecClass(it, args...)
-	case strings.HasSuffix(it, ".jar"):
-		return ExecJar(it, args...)
-	case strings.HasSuffix(it, ".java"):
-		return ExecJava(it, args...)
-	case len(it) > 10:
-		return ExecString(it, args...)
-	default:
-		return fmt.Errorf("Unable to run anything but .java|.class|.jar or Java source string")
-	}
-	return nil
-}
+// ParseCmd parses a typical java command line with options beginning
+// with dash (and containing no spaces). The first non-dashed argument
+// is considered the Name, or main class/java/jar file (see Cmd). The
+// remaining arguments are stored as arguments to the class/java/jar
+// itself.
+func ParseCmd(cmd ...string) *Cmd {
+	c := new(Cmd)
 
-// ExecString writes the Java source passed to a temporary file and then
-// calls ExecJava on it.
-func ExecString(src string, args ...string) error {
-	tmpfile := filepath.Join(os.TempDir(), internal.Isonan()+`.java`)
-	if err := os.WriteFile(tmpfile, []byte(src), 0600); err != nil {
-		return err
-	}
-	defer os.Remove(tmpfile)
-	return ExecJava(tmpfile, args...)
-}
-
-// ExecJava dynamically compiles and runs the java file passed but Java
-// 11 or higher to be installed in host system. The file must end with
-// ".java". If the java.FS is defined it will first be checked before
-// checking the local file system.
-func ExecJava(file string, args ...string) error {
-	cached := Cached(file)
-	if cached != "" {
-		file = cached
-	}
-
-	cmd := []string{"java"}
-	cmd = append(cmd, args...)
-	cmd = append(cmd, file)
-
-	return internal.Exec(cmd...)
-}
-
-// ExecJar calls "java -jar <file>". The file must end with ".jar" and
-// must contain a manifest identifying which main class to run. If the
-// file is found to be Cached, the cached copy will be used.  Otherwise,
-// the current file system is assumed. The Java CLASSPATH and other
-// properties must be set using other methods when wanted.
-func ExecJar(file string, args ...string) error {
-	cached := Cached(file)
-	if cached != "" {
-		file = cached
-	}
-
-	cmd := []string{"java"}
-	cmd = append(cmd, args...)
-	cmd = append(cmd, "-jar", file)
-
-	return internal.Exec(cmd...)
-}
-
-// ExecClass calls "java <name>". The name must be a file ending with
-// ".class" in the CLASSPATH. If a <name>.class file is found in the
-// cache (see Cached) the directory of the path returned from Cached
-// will be added to the front of the current CLASSPATH. Otherwise, the
-// regular Java rules for finding class files apply.
-func ExecClass(name string, args ...string) error {
-	cached := Cached(name + ".class")
-	if cached != "" {
-		cp := os.Getenv("CLASSPATH")
-		dir := filepath.Dir(cached)
-		if len(cp) > 0 {
-			os.Setenv("CLASSPATH", dir+string(os.PathListSeparator)+cp)
+	for _, it := range cmd {
+		if !strings.HasPrefix(it, "-") {
+			if c.Name == "" {
+				c.Name = it
+				continue
+			}
+		}
+		if c.Name == "" {
+			c.Options = append(c.Options, it)
 		} else {
-			os.Setenv("CLASSPATH", dir)
+			c.Args = append(c.Args, it)
 		}
 	}
 
-	cmd := []string{"java"}
-	cmd = append(cmd, args...)
-	cmd = append(cmd, name)
-
-	return internal.Exec(cmd...)
+	return c
 }
 
-// Out is a convenience function that takes a file path ending with
-// ".class", ".jar", ".java" and calls OutClass, OutJar, or OutJava. If
-// none of these suffixes match, and the string has a length greater
-// than 10, assumes OutString.
-func Out(it string, args ...string) string {
-	switch {
-	case strings.HasSuffix(it, ".class"):
-		return OutClass(it, args...)
-	case strings.HasSuffix(it, ".jar"):
-		return OutJar(it, args...)
-	case strings.HasSuffix(it, ".java"):
-		return OutJava(it, args...)
-	case len(it) > 10:
-		return OutString(it, args...)
-	default:
-		log.Println("Unable to run anything but .java|.class|.jar or Java source string")
+// Class2Path translates a simple string into a class name adding the
+// ".class" suffix if needed and replacing the dots (.) with the
+// os.PathSeparator.
+func Class2Path(cl string) string {
+	cl = strings.Replace(cl, ".", string(os.PathSeparator), -1)
+	if strings.HasSuffix(cl, "/class") {
+		return cl[:len(cl)-6] + ".class"
 	}
-	return ""
+	return cl + ".class"
 }
 
-// OutString writes the Java source passed to a temporary file and then
-// calls OutJava on it.
-func OutString(src string, args ...string) string {
-	tmpfile := filepath.Join(os.TempDir(), internal.Isonan()+`.java`)
-	if err := os.WriteFile(tmpfile, []byte(src), 0600); err != nil {
-		log.Println(err)
+// Exec takes the command line arguments to be passed to the first
+// "java" command executable found on the local system path. It's
+// usefulness is that it will automatically check for any extracted
+// cache in addition to host file system. Any ".class", ".jar", or
+// ".java" file is allowed and the same syntax rules from Java are implied.
+//
+// Since Java class names are indistinguishable from option values, and
+// since options can usually be any number of things including
+// those that have values separated by space, and since Java
+// implementation may have different options completely, this function
+// requires that all options begin with dash (-) and use one of the
+// no-space forms for making the value assignment (-Dfoo=bar, -foo:bar).
+//
+// This first argument to not begin with a dash is used as the class
+// name, jar, or java file.
+//
+// All arguments after the main class/jar/java argument are passed as
+// arguments to the main argument itself.
+func Exec(cmd ...string) error {
+	c := ParseCmd(cmd...)
+
+	cachename := c.Name
+	if !strings.HasSuffix(cachename, ".java") && !strings.HasSuffix(cachename, ".jar") {
+		cachename = Class2Path(c.Name)
 	}
-	defer os.Remove(tmpfile)
-	return OutJava(tmpfile, args...)
-}
 
-// OutJava dynamically compiles and runs the java file passed but Java
-// 11 or higher to be installed in host system. The file must end with
-// ".java". If the java.FS is defined it will first be checked before
-// checking the local file system.
-func OutJava(file string, args ...string) string {
-	cached := Cached(file)
+	cached := Cached(cachename)
 	if cached != "" {
-		file = cached
-	}
-
-	cmd := []string{"java"}
-	cmd = append(cmd, args...)
-	cmd = append(cmd, file)
-
-	return internal.Out(cmd...)
-}
-
-// OutJar calls "java -jar <file>". The file must end with ".jar" and
-// must include a manifest so that the correct class containing "main"
-// will be used. If the file is found to be Cached, the cached copy will
-// be used.  Otherwise, the current file system is assumed. The Java
-// CLASSPATH and other properties must be set using other methods when
-// wanted.
-func OutJar(file string, args ...string) string {
-	cached := Cached(file)
-	if cached != "" {
-		file = cached
-	}
-
-	cmd := []string{"java"}
-	cmd = append(cmd, args...)
-	cmd = append(cmd, "-jar", file)
-
-	return internal.Out(cmd...)
-}
-
-// OutClass calls "java <name>". The name must be a file ending with
-// ".class" in the CLASSPATH. If a <name>.class file is found in the
-// cache (see Cached) the directory of the path returned from Cached
-// will be added to the front of the current CLASSPATH. Otherwise, the
-// regular Java rules for finding class files apply.
-func OutClass(name string, args ...string) string {
-	cached := Cached(name + ".class")
-
-	if cached != "" {
-		cp := os.Getenv("CLASSPATH")
-		dir := filepath.Dir(cached)
-		if len(cp) > 0 {
-			os.Setenv("CLASSPATH", dir+string(os.PathListSeparator)+cp)
+		if os.Getenv("CLASSPATH") == "" {
+			os.Setenv("CLASSPATH", filepath.Dir(cached))
 		} else {
-			os.Setenv("CLASSPATH", dir)
+			new := filepath.Dir(cached) +
+				string(os.PathListSeparator) + os.Getenv("CLASSPATH")
+			os.Setenv("CLASSPATH", new)
 		}
 	}
 
-	cmd := []string{"java"}
-	cmd = append(cmd, args...)
-	cmd = append(cmd, name)
+	args := []string{"java"}
+	args = append(args, c.Options...)
+	args = append(args, c.Name)
+	args = append(args, c.Args...)
 
-	return internal.Out(cmd...)
+	return internal.Exec(args...)
+}
+
+// Out is the same as Exec but returns the standard output as a string
+// and logs any errors.
+func Out(cmd ...string) string {
+	c := ParseCmd(cmd...)
+
+	cachename := c.Name
+	if !strings.HasSuffix(cachename, ".java") && !strings.HasSuffix(cachename, ".jar") {
+		cachename = Class2Path(c.Name)
+	}
+
+	cached := Cached(cachename)
+	if cached != "" {
+		if os.Getenv("CLASSPATH") == "" {
+			os.Setenv("CLASSPATH", filepath.Dir(cached))
+		} else {
+			new := filepath.Dir(cached) +
+				string(os.PathListSeparator) + os.Getenv("CLASSPATH")
+			os.Setenv("CLASSPATH", new)
+		}
+	}
+
+	args := []string{"java"}
+	args = append(args, c.Options...)
+	args = append(args, c.Name)
+	args = append(args, c.Args...)
+
+	return internal.Out(args...)
 }
