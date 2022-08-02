@@ -76,7 +76,8 @@ func Extract(fsys embed.FS, root string) error {
 }
 
 // Cached returns the full path the extracted cache location of the file
-// indicated by it.
+// indicated by it. Note that extraction does not happen automatically
+// and must be explicitly done by calling Extract.
 func Cached(file string) string {
 	path := filepath.Join(CacheDir, file)
 	if fs.Exists(path) {
