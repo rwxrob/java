@@ -52,12 +52,27 @@ func init() {
 	}
 }
 
+// careful not to call more than once since will duplicate
+func updateCP() {
+	if os.Getenv("CLASSPATH") == "" {
+		os.Setenv("CLASSPATH", CacheDir)
+		return
+	}
+	os.Setenv("CLASSPATH",
+		CacheDir+string(os.PathListSeparator)+os.Getenv("CLASSPATH"))
+}
+
 // Extract explicitly extracts all of an embedded file system into the
 // CacheDir starting from the root path passed. Files in the CacheDir
-// always have priority over anything else on the system.
+// always have priority over anything else on the system since CacheDir
+// is added to the beginning of the CLASSPATH.
 func Extract(fsys embed.FS, root string) error {
 	os.MkdirAll(CacheDir, fs.ExtractDirPerms)
-	return fs.ExtractEmbed(fsys, root, CacheDir)
+	if err := fs.ExtractEmbed(fsys, root, CacheDir); err != nil {
+		return err
+	}
+	updateCP()
+	return nil
 }
 
 // Cached returns the full path the extracted cache location of the file
@@ -126,26 +141,17 @@ func Class2Path(cl string) string {
 // arguments to the main argument itself.
 func Exec(cmd ...string) error {
 	c := ParseCmd(cmd...)
+	main := c.Name
 
-	cachename := c.Name
-	if !strings.HasSuffix(cachename, ".java") && !strings.HasSuffix(cachename, ".jar") {
-		cachename = Class2Path(c.Name)
-	}
-
-	cached := Cached(cachename)
-	if cached != "" {
-		if os.Getenv("CLASSPATH") == "" {
-			os.Setenv("CLASSPATH", filepath.Dir(cached))
-		} else {
-			new := filepath.Dir(cached) +
-				string(os.PathListSeparator) + os.Getenv("CLASSPATH")
-			os.Setenv("CLASSPATH", new)
+	if strings.HasSuffix(c.Name, ".java") || strings.HasSuffix(c.Name, ".jar") {
+		if c := Cached(c.Name); c != "" {
+			main = c
 		}
 	}
 
 	args := []string{"java"}
 	args = append(args, c.Options...)
-	args = append(args, c.Name)
+	args = append(args, main)
 	args = append(args, c.Args...)
 
 	return internal.Exec(args...)
@@ -155,26 +161,17 @@ func Exec(cmd ...string) error {
 // and logs any errors.
 func Out(cmd ...string) string {
 	c := ParseCmd(cmd...)
+	main := c.Name
 
-	cachename := c.Name
-	if !strings.HasSuffix(cachename, ".java") && !strings.HasSuffix(cachename, ".jar") {
-		cachename = Class2Path(c.Name)
-	}
-
-	cached := Cached(cachename)
-	if cached != "" {
-		if os.Getenv("CLASSPATH") == "" {
-			os.Setenv("CLASSPATH", filepath.Dir(cached))
-		} else {
-			new := filepath.Dir(cached) +
-				string(os.PathListSeparator) + os.Getenv("CLASSPATH")
-			os.Setenv("CLASSPATH", new)
+	if strings.HasSuffix(c.Name, ".java") || strings.HasSuffix(c.Name, ".jar") {
+		if c := Cached(c.Name); c != "" {
+			main = c
 		}
 	}
 
 	args := []string{"java"}
 	args = append(args, c.Options...)
-	args = append(args, c.Name)
+	args = append(args, main)
 	args = append(args, c.Args...)
 
 	return internal.Out(args...)
